@@ -141,6 +141,8 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->trace_mask = 0;
+
   return p;
 }
 
@@ -314,6 +316,8 @@ fork(void)
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
+
+  np->trace_mask = p->trace_mask;
 
   return pid;
 }
@@ -653,4 +657,20 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// collect the number of processes whose state is not UNUSED
+uint64
+proc_exclude_unused(void)
+{
+  struct proc *p;
+  uint64 n = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->state == UNUSED)
+      continue;
+    n++;
+  }
+
+  return n;
 }
