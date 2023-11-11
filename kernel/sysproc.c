@@ -81,7 +81,35 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
-  return 0;
+  uint32 max_page = 32;
+  uint64 start_page;
+  int num_page; 
+  uint64 user_abits;
+  uint32 kbits = 0;
+  pagetable_t pagetable = myproc()->pagetable;
+  pte_t *pte;
+  
+  //vmprint(pagetable);
+
+  if(argaddr(0, &start_page) < 0)
+    return -1;
+  if(argint(1, &num_page) < 0)
+    return -1;
+  if(argaddr(2, &user_abits) < 0)
+    return -1;
+
+  if(num_page > max_page)
+    num_page = max_page;
+  for(int i = 0; i < num_page; i++){ 
+    pte = walk(pagetable, start_page + i * PGSIZE, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+      return -1; 
+    if((*pte) & PTE_A){
+      kbits = kbits | (1 << i);
+      *pte = (*pte) & (~PTE_A);
+    }
+  }
+  return copyout(pagetable, user_abits, (char *)&kbits, max_page);
 }
 #endif
 
