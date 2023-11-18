@@ -109,7 +109,8 @@ sys_pgaccess(void)
       *pte = (*pte) & (~PTE_A);
     }
   }
-  return copyout(pagetable, user_abits, (char *)&kbits, max_page);
+  //printf("sizeof(uint32) = %d\n", sizeof(uint32));
+  return copyout(pagetable, user_abits, (char *)&kbits, sizeof(uint32));
 }
 #endif
 
