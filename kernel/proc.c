@@ -119,13 +119,17 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-
+  
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+  p->alarm = (struct alarm *)((uint64)(p->trapframe) + sizeof(struct trapframe) + 64);
+  p->alarm->ticks = 0;
+  p->alarm->interval = 0;
+  p->alarm->running = 0;
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -294,6 +298,9 @@ fork(void)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
+  // don't copy arguments related to struct alarm 
+  np->alarm->interval = 0;
+  np->alarm->running = 0;
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)

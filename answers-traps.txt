@@ -1,0 +1,10 @@
+1, a0, a1 and a2 contains arguments to functions. a2 holds 13 in main's call to printf.
+2, There is no call to funtion f in the assembly code for main.
+3, Function printf is located at 0x668
+4, Register ra is 0x38 just after the jalr to printf in main
+5, The output is HE110 World.
+   unsigned int i = 0x726c42.
+   don't need to change 57616.
+6, what value gonna be printed after 'y=' depends on the value that a2 holds before the call to printf("x=%d y=%d", 3).
+
+

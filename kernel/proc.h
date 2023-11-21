@@ -80,6 +80,15 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+struct alarm {
+  int interval;    // call handler per interval ticks
+  uint64 handler;  // alarm handler function in user space. void (*handler)()
+  int ticks;       // how many ticks have passed since last call to alarm handler
+  int running;     // flag indicate whether the handler is being called and running, prevent re-entrant calls to the handler.
+  
+  struct trapframe tf;
+}; 
+
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -105,4 +114,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct alarm *alarm;         // store values to handle signal alarm in user space
 };
