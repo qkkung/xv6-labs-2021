@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -148,8 +150,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
-      panic("mappages: remap");
+    //if(*pte & PTE_V)
+    //  panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -303,7 +305,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,12 +312,21 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+/*
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
       kfree(mem);
+      goto err;
+    }
+*/
+    increment_ref(pa, pte);
+    flags = PTE_FLAGS(*pte);
+
+    if(mappages(new, PGROUNDDOWN(i), PGSIZE, (uint64)pa, flags) != 0){
+      kfree((void *)pa);
       goto err;
     }
   }
@@ -347,10 +357,30 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  pte_t *pte;
+  struct proc *p = myproc();
+
+  if(dstva >= MAXVA){
+    return -1;
+  }
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    //pa0 = walkaddr(pagetable, va0);
+    pte = walk(pagetable, va0, 0);
+    if(pte == 0)
+      return -1;
+    if((*pte & PTE_V) == 0)
+      return -1;
+    if((*pte & PTE_U) == 0)
+      return -1;
+    if((*pte & PTE_W) == 0 && (*pte & PTE_COW) == PTE_COW){
+      dealpgfault(va0);
+      if(p->killed)
+        exit(-1);
+    }
+
+    pa0 = PTE2PA(*pte);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
@@ -430,5 +460,58 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }
+}
+
+void
+dealpgfault(uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+  int refcnt;
+  char *mem;
+  uint flags;
+
+  struct proc *p = myproc(); 
+  
+  if(va >= MAXVA){
+    //printf("before killed dealpgfault: pid=%d, killed=%d\n", p->pid, p->killed);
+    p->killed = 1;
+    //printf("after killed dealpgfault: pid=%d, killed=%d\n", p->pid, p->killed);
+    return;
+  }
+
+  if((pte = walk(p->pagetable, va, 0)) == 0)
+    panic("dealpgfault: pte should exist");  
+  if((*pte & PTE_V) == 0)
+    panic("dealpgfault: page not present");
+  if((*pte & PTE_COW) == 0){
+    printf("dealpgfault: not cow, kill this process, pid=%d, pa=%p, index=%d\n", p->pid, PTE2PA(*pte), pg_refcnt((uint64)PTE2PA(*pte)));
+    p->killed = 1;
+    return;
+  }
+  
+  pa = PTE2PA(*pte);
+  refcnt = pg_refcnt(pa);
+  if(refcnt == 1){
+    *pte |= PTE_W;
+  } else if(refcnt > 1){
+    if((mem = kalloc()) == 0){
+      p->killed = 1;
+      return;
+    }
+    memmove(mem, (char*)pa, PGSIZE);
+
+    flags = PTE_FLAGS(*pte);
+    flags |= PTE_FLAGS(PTE_W);
+    flags &= PTE_FLAGS(~PTE_COW);
+    
+    if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, flags) != 0)
+      panic("dealpgfault: pte should exist 2");  
+    
+    kfree((void *)pa);
+    
+  } else { 
+    panic("dealpgfault: shouldn't come here");
   }
 }
