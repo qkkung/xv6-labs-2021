@@ -10,6 +10,7 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
+struct run * stealpage();
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
@@ -18,16 +19,35 @@ struct run {
   struct run *next;
 };
 
-struct {
+struct kmem {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+};
+
+struct kmem kmems[NCPULOCAL];
+
+/*  char buf[7]; 
+  buf[6] = 0;
+  snprintf(buf, 6, "kmem%d\n", id);
+  printf(buf);  
+  printf("\n");
+*/    
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  push_off();
+  
+  int i = cpuid();
+  initlock(&kmems[i].lock, "kmem");
+
+  uint64 bottom = PGROUNDUP((uint64)end);
+  uint64 top = PGROUNDDOWN((uint64)PHYSTOP);
+  uint64 n = (top - bottom) / PGSIZE / NCPULOCAL;
+  bottom = bottom + i * n * PGSIZE,
+  top = ((i + 1) == NCPULOCAL ? top : (bottom + n * PGSIZE));
+  freerange((void*)bottom, (void*)top);
+  pop_off();
 }
 
 void
@@ -35,8 +55,9 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by v,
@@ -56,10 +77,13 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&kmems[id].lock);
+  r->next = kmems[id].freelist;
+  kmems[id].freelist = r;
+  release(&kmems[id].lock);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,13 +94,45 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&kmems[id].lock);
+  r = kmems[id].freelist;
+  if(r){
+    kmems[id].freelist = r->next;
+  }
+  release(&kmems[id].lock);
+
+  if(!r){
+    r = stealpage();
+    if(r){
+      acquire(&kmems[id].lock);
+      kmems[id].freelist = r->next;
+      release(&kmems[id].lock);
+    }
+  } 
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+//steal whole pages from other cpu's free memory list
+struct run *
+stealpage()
+{
+  
+  for(int i = 0; i < NCPULOCAL; i++){
+    acquire(&kmems[i].lock);
+    if(kmems[i].freelist){
+      struct run *r = kmems[i].freelist;
+      kmems[i].freelist = 0;
+      release(&kmems[i].lock);
+      return r;
+    }
+    release(&kmems[i].lock);
+  } 
+  return 0;
+}
+
