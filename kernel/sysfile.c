@@ -283,6 +283,31 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+struct inode*
+opensymlink(struct inode *ip)
+{
+  char targetpath[MAXPATH];
+  struct inode *targetip;
+  int i;
+ 
+  for(i = 0; i < MAXLINK; i++){
+    if(readi(ip, 0,(uint64)targetpath, 0, MAXPATH) != ip->size) 
+      panic("opensymlink: readi");
+    iunlockput(ip);
+ 
+    if((targetip = namei(targetpath)) == 0) 
+      return 0;
+    ilock(targetip);
+    if(targetip->type != T_SYMLINK)
+      break;
+    ip = targetip;
+    memset(targetpath, 0, MAXPATH);
+  }
+  if(i == MAXLINK)
+    return 0;
+  return targetip; 
+}
+
 uint64
 sys_open(void)
 {
@@ -322,6 +347,14 @@ sys_open(void)
     return -1;
   }
 
+  if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+    ip = opensymlink(ip);
+    if(ip == 0){
+      end_op();
+      return -1;
+    }
+  }
+
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
@@ -341,7 +374,7 @@ sys_open(void)
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
-  if((omode & O_TRUNC) && ip->type == T_FILE){
+  if((omode & O_TRUNC) && (ip->type == T_FILE || ip->type == T_FILE)){
     itrunc(ip);
   }
 
@@ -484,3 +517,34 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  int len;
+  struct inode *ip;
+
+  if((len = argstr(0, target, MAXPATH)) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+  
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op(); 
+    return -1;
+  }
+  
+  if(writei(ip, 0, (uint64)target, 0, len) != len)
+    panic("symlink: write target");
+
+  iunlockput(ip);
+ 
+  end_op();
+
+  return 0;
+}
+
+
+
+
+
