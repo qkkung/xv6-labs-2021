@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -27,6 +30,42 @@ void
 trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
+}
+
+void
+dommap(struct proc *p){
+  uint64 stval = r_stval();    
+  if(stval < p->sz && stval >= p->sz + p->vmasize){
+    p->killed  = 1;
+  } else {
+    int i;
+    acquire(&vmas.lock);
+    for(i = 0; i < 16; i++){
+/*
+      if(vmas.list[i].pid == p->pid){
+        printf("stval:%d, addr:%d, sz+vmasize:%d\n", stval, vmas.list[i].addr, vmas.list[i].addr + vmas.list[i].len);
+      }
+*/
+      if(vmas.list[i].pid == p->pid && stval >= vmas.list[i].addr
+         && stval < vmas.list[i].addr + vmas.list[i].len){
+         
+        uint64 pa = (uint64)kalloc(); 
+        memset((uint64*)pa, 0, PGSIZE);
+        kvmmap(p->pagetable, PGROUNDDOWN(stval), pa, PGSIZE, (vmas.list[i].perms << 1) | PTE_U); 
+        struct inode *ip = vmas.list[i].fp->ip;
+        ilock(ip);
+        if(readi(ip, 0, pa, PGROUNDDOWN(stval - vmas.list[i].addr), PGSIZE) <= 0) 
+          panic("dommap readi");
+        iunlock(ip);
+        break;
+      }
+    }
+    release(&vmas.lock);
+    if(i == 16){
+      p->killed = 1;
+      printf("no vma corresponds to this page fault\n");
+    }
+  }
 }
 
 //
@@ -67,6 +106,8 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 0xd){
+    dommap(p); 
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -137,7 +178,7 @@ kerneltrap()
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
-  
+
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)

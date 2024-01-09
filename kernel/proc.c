@@ -301,6 +301,15 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  // copy virtual memory area created by mmap() call from parent
+  //acquire(&vmas.lock);
+  for(int i = 0; i < 16; i++){
+    if(vmas.list[i].pid == p->pid){  
+      mmap(vmas.list[i].addr, vmas.list[i].len, vmas.list[i].perms, vmas.list[i].flags, vmas.list[i].fp, np);
+    }
+  }
+  //release(&vmas.lock);
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -352,6 +361,14 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+  // close virtual memory area 
+  //acquire(&vmas.lock);
+  for(int i = 0; i < 16; i++){
+    if(vmas.list[i].pid == p->pid){
+      munmap(vmas.list[i].addr, vmas.list[i].len);
+    }
+  }
+  //release(&vmas.lock);
 
   begin_op();
   iput(p->cwd);

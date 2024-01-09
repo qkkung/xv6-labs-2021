@@ -484,3 +484,103 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  int length, prot, flags;
+  struct file *f;
+  
+  if(argint(1, &length) < 0 || argint(2, &prot) < 0)
+    return -1;
+  if(argint(3, &flags) < 0 || argfd(4, 0, &f) < 0)
+    return -1;
+
+  if(f->writable == 0 && flags == MAP_SHARED){
+    if(prot & PROT_WRITE)
+      return -1;
+  }
+  
+  struct proc *p = myproc();
+  acquire(&vmas.lock);
+  uint64 addr = mmap(0, length, prot, flags, f, p);
+  release(&vmas.lock);
+  return addr;
+}
+
+// caller must hold vmas.lock
+uint64
+mmap(uint64 addr, int length, int prot, int flags, struct file *fp, struct proc *p)
+{
+  int i;
+  for(i = 0; i < 16; i++){
+    if(vmas.list[i].pid == 0){
+      vmas.list[i].addr = p->sz + p->vmasize;    
+      if(addr)
+        vmas.list[i].addr = addr;
+      vmas.list[i].origin = vmas.list[i].addr;
+      vmas.list[i].len = length;    
+      vmas.list[i].perms = prot;    
+      vmas.list[i].flags = flags;    
+      vmas.list[i].fp = fp;    
+      vmas.list[i].pid = p->pid;    
+      break;
+    }
+  }
+  if(i == 16)
+    panic("sys_mmap");
+  
+  filedup(fp); 
+  if(p->vmasize < vmas.list[i].addr + length)
+    p->vmasize = vmas.list[i].addr + length;   
+  return vmas.list[i].addr;
+}
+
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  //acquire(&vmas.lock);
+  munmap(addr, length);
+  //release(&vmas.lock);
+  return 0;
+}
+
+// caller must hold vmas.lock
+int
+munmap(uint64 addr, int length)
+{
+  struct proc *p = myproc();
+  int i;
+  for(i = 0; i< 16; i++){
+    if(p->pid == vmas.list[i].pid && addr == vmas.list[i].addr){
+      if(walkaddr(p->pagetable, addr) == 0)
+        break;
+
+      if(vmas.list[i].flags == MAP_SHARED){
+        ilock(vmas.list[i].fp->ip);
+        vmas.list[i].fp->off = vmas.list[i].addr - vmas.list[i].origin;
+        iunlock(vmas.list[i].fp->ip);
+        filewrite(vmas.list[i].fp, addr, length); 
+      }
+
+      uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+
+      break;
+    }
+  }
+  if(i == 16)
+    panic("sys_munmap");
+  
+  vmas.list[i].len = vmas.list[i].len > length ? vmas.list[i].len - length : 0;
+  vmas.list[i].addr = addr + length;        
+  if(vmas.list[i].len == 0)
+    vmas.list[i].pid = 0;
+  if(vmas.list[i].pid == 0)
+    fileclose(vmas.list[i].fp);
+  return 0;
+}

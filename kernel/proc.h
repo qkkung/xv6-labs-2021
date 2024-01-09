@@ -80,6 +80,24 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+// virtual memory area, used for mmap() and munmap()
+struct vma {
+  uint64 addr;
+  int    len;
+  int    perms;
+  int    flags;
+  struct file *fp;
+  int    pid;
+  uint64 origin; // set to addr when calling sys_mmap(), and never change again
+};
+
+struct vmalist {
+  struct spinlock lock;
+  struct vma list[16];
+};
+
+extern struct vmalist vmas;
+
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -105,4 +123,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  uint64 vmasize;              // virtual memory area size allocated by mmap()
 };

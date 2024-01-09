@@ -5,11 +5,15 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
  */
 pagetable_t kernel_pagetable;
+
+struct vmalist vmas;
 
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
@@ -54,6 +58,7 @@ void
 kvminit(void)
 {
   kernel_pagetable = kvmmake();
+  initlock(&vmas.lock, "vma lock");
 }
 
 // Switch h/w page table register to the kernel's page table,
